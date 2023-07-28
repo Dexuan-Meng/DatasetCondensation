@@ -5,33 +5,14 @@ import argparse
 import numpy as np
 import torch
 import torch.nn as nn
+import torchvision
 from torchvision.utils import save_image
 from utils import get_loops, get_dataset, get_network, get_eval_pool, evaluate_synset, get_daparam, match_loss, get_time, TensorDataset, epoch, DiffAugment, ParamDiffAug
+import wandb
 
 
-def main():
+def main(args):
 
-    parser = argparse.ArgumentParser(description='Parameter Processing')
-    parser.add_argument('--method', type=str, default='DC', help='DC/DSA')
-    parser.add_argument('--dataset', type=str, default='CIFAR10', help='dataset')
-    parser.add_argument('--model', type=str, default='ConvNet', help='model')
-    parser.add_argument('--ipc', type=int, default=1, help='image(s) per class')
-    parser.add_argument('--eval_mode', type=str, default='S', help='eval_mode') # S: the same to training model, M: multi architectures,  W: net width, D: net depth, A: activation function, P: pooling layer, N: normalization layer,
-    parser.add_argument('--num_exp', type=int, default=5, help='the number of experiments')
-    parser.add_argument('--num_eval', type=int, default=20, help='the number of evaluating randomly initialized models')
-    parser.add_argument('--epoch_eval_train', type=int, default=300, help='epochs to train a model with synthetic data')
-    parser.add_argument('--Iteration', type=int, default=1000, help='training iterations')
-    parser.add_argument('--lr_img', type=float, default=0.1, help='learning rate for updating synthetic images')
-    parser.add_argument('--lr_net', type=float, default=0.01, help='learning rate for updating network parameters')
-    parser.add_argument('--batch_real', type=int, default=256, help='batch size for real data')
-    parser.add_argument('--batch_train', type=int, default=256, help='batch size for training networks')
-    parser.add_argument('--init', type=str, default='noise', help='noise/real: initialize synthetic images from random noise or randomly sampled real images.')
-    parser.add_argument('--dsa_strategy', type=str, default='None', help='differentiable Siamese augmentation strategy')
-    parser.add_argument('--data_path', type=str, default='data', help='dataset path')
-    parser.add_argument('--save_path', type=str, default='result', help='path to save results')
-    parser.add_argument('--dis_metric', type=str, default='ours', help='distance metric')
-
-    args = parser.parse_args()
     args.outer_loop, args.inner_loop = get_loops(args.ipc)
     args.device = 'cuda' if torch.cuda.is_available() else 'cpu'
     args.dsa_param = ParamDiffAug()
@@ -53,8 +34,19 @@ def main():
     for key in model_eval_pool:
         accs_all_exps[key] = []
 
-    data_save = []
+    wandb.init(sync_tensorboard=False,
+               project="DC-Fac",
+               job_type="CleanRepo",
+               config=args
+               )
+    args = type('', (), {})()
 
+    for key in wandb.config._items:
+        setattr(args, key, wandb.config._items[key])
+    
+    data_save = []
+    best_acc = []
+    best_std = []
 
     for exp in range(args.num_exp):
         print('\n================== Exp %d ==================\n '%exp)
@@ -100,9 +92,14 @@ def main():
         optimizer_img = torch.optim.SGD([image_syn, ], lr=args.lr_img, momentum=0.5) # optimizer_img for synthetic data
         optimizer_img.zero_grad()
         criterion = nn.CrossEntropyLoss().to(args.device)
+
+        start_time = time.time()
         print('%s training begins'%get_time())
 
         for it in range(args.Iteration+1):
+            save_this_it = False
+
+            wandb.log({"Progress": it}, step=it)
 
             ''' Evaluate synthetic data '''
             if it in eval_it_pool:
@@ -128,19 +125,63 @@ def main():
                         image_syn_eval, label_syn_eval = copy.deepcopy(image_syn.detach()), copy.deepcopy(label_syn.detach()) # avoid any unaware modification
                         _, acc_train, acc_test = evaluate_synset(it_eval, net_eval, image_syn_eval, label_syn_eval, testloader, args)
                         accs.append(acc_test)
+
+                    # pack these into a function in utils.py
+                    accs_test = np.array(accs)
+                    acc_test_mean = np.mean(accs_test)
+                    acc_test_std = np.std(accs_test)
+                    if acc_test_mean > best_acc[exp][model_eval]:
+                        best_acc[exp][model_eval] = acc_test_mean
+                        best_std[exp][model_eval] = acc_test_std
                     print('Evaluate %d random %s, mean = %.4f std = %.4f\n-------------------------'%(len(accs), model_eval, np.mean(accs), np.std(accs)))
+                    
+                    wandb.log({'Accuracy/{}'.format(model_eval): acc_test_mean}, step=it)
+                    wandb.log({'Max_Accuracy/{}'.format(model_eval): best_acc[model_eval]}, step=it)
+                    wandb.log({'Std/{}'.format(model_eval): acc_test_std}, step=it)
+                    wandb.log({'Max_Std/{}'.format(model_eval): best_std[model_eval]}, step=it)
 
                     if it == args.Iteration: # record the final results
                         accs_all_exps[model_eval] += accs
 
-                ''' visualize and save '''
-                save_name = os.path.join(args.save_path, 'vis_%s_%s_%s_%dipc_exp%d_iter%d.png'%(args.method, args.dataset, args.model, args.ipc, exp, it))
-                image_syn_vis = copy.deepcopy(image_syn.detach().cpu())
-                for ch in range(channel):
-                    image_syn_vis[:, ch] = image_syn_vis[:, ch]  * std[ch] + mean[ch]
-                image_syn_vis[image_syn_vis<0] = 0.0
-                image_syn_vis[image_syn_vis>1] = 1.0
-                save_image(image_syn_vis, save_name, nrow=args.ipc) # Trying normalize = True/False may get better visual effects.
+            if it in eval_it_pool and (save_this_it or it % 1000 == 0):
+                with torch.no_grad():
+                    image_save = image_syn.flatten(0, 1).detach()
+
+                    save_to_local = False
+                    if save_to_local:
+                        save_dir = os.path.join(".", "logged_files", args.dataset, wandb.run.name)
+
+                        if not os.path.exists(save_dir):
+                            os.makedirs(save_dir)
+
+                        torch.save(image_save.cpu(), os.path.join(save_dir, "images_{}.pt".format(it)))
+                        # torch.save(styles.state_dict(), os.path.join(save_dir, "styles_{}.pt".format(it)))
+
+                        if save_this_it:
+                            torch.save(image_save.cpu(), os.path.join(save_dir, "images_best.pt"))
+                            # torch.save(styles.state_dict(), os.path.join(save_dir, "weights_best.pt"))
+
+                    wandb.log({"Pixels": wandb.Histogram(image_syn.detach().cpu())}, step=it)
+
+                    if args.ipc < 50 or args.force_save:
+                        upsampled = image_save
+                        if args.dataset != "ImageNet":
+                            upsampled = torch.repeat_interleave(upsampled, repeats=4, dim=2)
+                            upsampled = torch.repeat_interleave(upsampled, repeats=4, dim=3)
+                        grid = torchvision.utils.make_grid(upsampled, nrow=10, normalize=True, scale_each=True)
+                        wandb.log({"Synthetic_Images": wandb.Image(grid.detach().cpu())}, step=it)
+                        wandb.log({'Synthetic_Pixels': wandb.Histogram(image_save.detach().cpu())}, step=it)
+
+                        for clip_val in [2.5]:
+                            std = torch.std(image_save)
+                            mean = torch.mean(image_save)
+                            upsampled = torch.clip(image_save, min=mean - clip_val * std, max=mean + clip_val * std)
+                            if args.dataset != "ImageNet":
+                                upsampled = torch.repeat_interleave(upsampled, repeats=4, dim=2)
+                                upsampled = torch.repeat_interleave(upsampled, repeats=4, dim=3)
+                            grid = torchvision.utils.make_grid(upsampled, nrow=10, normalize=True, scale_each=True)
+                            wandb.log({"Clipped_Synthetic_Images/std_{}".format(clip_val): wandb.Image(
+                                grid.detach().cpu())}, step=it)
 
 
             ''' Train synthetic data '''
@@ -203,6 +244,16 @@ def main():
                 optimizer_img.step()
                 loss_avg += loss.item()
 
+                # wandb.log({"Grand_Loss": grand_loss.detach().cpu(),
+                #     "Param_Loss": param_loss.detach().cpu(),
+                #     "Club_Content_Loss": club_content_loss.detach().cpu(),
+                #     "Sim_Content_Loss": sim_content_loss.detach().cpu(),
+                #     "Cls_Content_Loss": cls_content_loss.detach().cpu(),
+                #     "Likeli_Content_Loss": likeli_content_loss.detach().cpu(),
+                #     "Contrast_Content_Loss": contrast_content_loss.detach().cpu(),
+                #     "Start_Epoch": start_epoch})
+                wandb.log({"Loss": loss.detach().cpu()})
+                
                 if ol == args.outer_loop - 1:
                     break
 
@@ -214,16 +265,15 @@ def main():
                 for il in range(args.inner_loop):
                     epoch('train', trainloader, net, optimizer_net, criterion, args, aug = True if args.dsa else False)
 
+            time_cost = time.time() - start_time
 
             loss_avg /= (num_classes*args.outer_loop)
 
             if it%10 == 0:
                 print('%s iter = %04d, loss = %.4f' % (get_time(), it, loss_avg))
 
-            if it == args.Iteration: # only record the final results
-                data_save.append([copy.deepcopy(image_syn.detach().cpu()), copy.deepcopy(label_syn.detach().cpu())])
-                torch.save({'data': data_save, 'accs_all_exps': accs_all_exps, }, os.path.join(args.save_path, 'res_%s_%s_%s_%dipc.pt'%(args.method, args.dataset, args.model, args.ipc)))
 
+    wandb.finish()  
 
     print('\n==================== Final Results ====================\n')
     for key in model_eval_pool:
@@ -233,6 +283,27 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser(description='Parameter Processing')
+    parser.add_argument('--method', type=str, default='DC', help='DC/DSA')
+    parser.add_argument('--dataset', type=str, default='CIFAR10', help='dataset')
+    parser.add_argument('--model', type=str, default='ConvNet', help='model')
+    parser.add_argument('--ipc', type=int, default=1, help='image(s) per class')
+    parser.add_argument('--eval_mode', type=str, default='S', help='eval_mode') # S: the same to training model, M: multi architectures,  W: net width, D: net depth, A: activation function, P: pooling layer, N: normalization layer,
+    parser.add_argument('--num_exp', type=int, default=1, help='the number of experiments')
+    parser.add_argument('--num_eval', type=int, default=3, help='the number of evaluating randomly initialized models')
+    parser.add_argument('--epoch_eval_train', type=int, default=300, help='epochs to train a model with synthetic data')
+    parser.add_argument('--Iteration', type=int, default=10, help='training iterations')
+    parser.add_argument('--lr_img', type=float, default=0.1, help='learning rate for updating synthetic images')
+    parser.add_argument('--lr_net', type=float, default=0.01, help='learning rate for updating network parameters')
+    parser.add_argument('--batch_real', type=int, default=256, help='batch size for real data')
+    parser.add_argument('--batch_train', type=int, default=256, help='batch size for training networks')
+    parser.add_argument('--init', type=str, default='noise', help='noise/real: initialize synthetic images from random noise or randomly sampled real images.')
+    parser.add_argument('--dsa_strategy', type=str, default='None', help='differentiable Siamese augmentation strategy')
+    parser.add_argument('--data_path', type=str, default='data', help='dataset path')
+    parser.add_argument('--save_path', type=str, default='result', help='path to save results')
+    parser.add_argument('--dis_metric', type=str, default='ours', help='distance metric')
+
+    args = parser.parse_args()
+    main(args)
 
 

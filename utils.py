@@ -8,6 +8,7 @@ from torch.utils.data import Dataset
 from torchvision import datasets, transforms
 from scipy.ndimage.interpolation import rotate as scipyrotate
 from networks import MLP, ConvNet, LeNet, AlexNet, AlexNetBN, VGG11, VGG11BN, ResNet18, ResNet18BN_AP, ResNet18BN
+import wandb
 
 def get_dataset(dataset, data_path):
     if dataset == 'MNIST':
@@ -638,6 +639,11 @@ def rand_cutout(x, param):
     mask[grid_batch, grid_x, grid_y] = 0
     x = x * mask.unsqueeze(1)
     return x
+
+
+def save_syn_image():
+
+    pass
 
 
 AUGMENT_FNS = {
