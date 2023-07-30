@@ -9,6 +9,7 @@ import torchvision
 from torchvision.utils import save_image
 from utils import get_loops, get_dataset, get_network, get_eval_pool, evaluate_synset, get_daparam, match_loss, get_time, TensorDataset, epoch, DiffAugment, ParamDiffAug
 import wandb
+from contrastive_loss import *
 
 
 def main(args):
@@ -25,10 +26,13 @@ def main(args):
         os.mkdir(args.save_path)
 
     eval_it_pool = np.arange(0, args.Iteration+1, 500).tolist() if args.eval_mode == 'S' or args.eval_mode == 'SS' else [args.Iteration] # The list of iterations when we evaluate models and record results.
+    if 0.1 * args.Iteration < 500:
+        eval_it_pool.append(round(0.9 * args.Iteration))
     if args.Iteration not in eval_it_pool:
         eval_it_pool.append(args.Iteration)
     print('eval_it_pool: ', eval_it_pool)
-    channel, im_size, num_classes, class_names, mean, std, dst_train, dst_test, testloader = get_dataset(args.dataset, args.data_path)
+
+    channel, im_size, num_classes, _, mean, std, dst_train, _, testloader = get_dataset(args.dataset, args.data_path) # _: class_names, dst_test
     model_eval_pool = get_eval_pool(args.eval_mode, args.model, args.model)
 
 
@@ -81,6 +85,10 @@ def main(args):
         ''' initialize the synthetic data '''
         image_syn = torch.randn(size=(num_classes*args.ipc, channel, im_size[0], im_size[1]), dtype=torch.float, requires_grad=True, device=args.device)
         label_syn = torch.tensor([np.ones(args.ipc)*i for i in range(num_classes)], dtype=torch.long, requires_grad=False, device=args.device).view(-1) # [0,0,0, 1,1,1, ..., 9,9,9]
+        ### ### ### ### ###
+        styles = nn.ModuleList([StyleTranslator(in_channel=1 if args.single_channel else 3, mid_channel=channel, out_channel=channel, kernel_size=3)
+                                for _ in range(args.n_style)])
+        sim_content_net = Extractor(num_classes)
 
         if args.init == 'real':
             print('initialize synthetic data from random real images')
@@ -124,7 +132,11 @@ def main(args):
                     else:
                         args.epoch_eval_train = 300
 
-
+                    accs = []
+                    for it_eval in range(args.num_eval):
+                        net_eval = get_network(model_eval, channel, num_classes, im_size).to(args.device) # get a random model
+                        image_syn_eval, label_syn_eval = copy.deepcopy(image_syn.detach()), copy.deepcopy(label_syn.detach()) # avoid any unaware modification
+                        _, acc_train, acc_test = evaluate_synset(it_eval, net_eval, image_syn_eval, label_syn_eval, testloader, args)
                         accs.append(acc_test)
 
                     # pack these into a function in utils.py
