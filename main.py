@@ -256,8 +256,8 @@ def main(args):
                 #     "Cls_Content_Loss": cls_content_loss.detach().cpu(),
                 #     "Likeli_Content_Loss": likeli_content_loss.detach().cpu(),
                 #     "Contrast_Content_Loss": contrast_content_loss.detach().cpu(),
-                #     "Start_Epoch": start_epoch})
-                wandb.log({"Loss": loss.detach().cpu()})
+                #     "Start_Epoch": start_epoch}, step = it)
+                wandb.log({"Loss": loss.detach().cpu()}, step = it)
                 
                 if ol == args.outer_loop - 1:
                     break
@@ -270,12 +270,12 @@ def main(args):
                 for il in range(args.inner_loop):
                     epoch('train', trainloader, net, optimizer_net, criterion, args, aug = True if args.dsa else False)
 
-            time_cost = time.time() - start_time
-
             loss_avg /= (num_classes*args.outer_loop)
 
             if it%10 == 0:
                 print('%s iter = %04d, loss = %.4f' % (get_time(), it, loss_avg))
+            
+            wandb.log({"Time_Cost": time.time() - start_time}, step = it)
 
 
     wandb.finish()  
@@ -297,7 +297,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_exp', type=int, default=1, help='the number of experiments')
     parser.add_argument('--num_eval', type=int, default=3, help='the number of evaluating randomly initialized models')
     parser.add_argument('--epoch_eval_train', type=int, default=300, help='epochs to train a model with synthetic data')
-    parser.add_argument('--Iteration', type=int, default=1500, help='training iterations')
+    parser.add_argument('--Iteration', type=int, default=15, help='training iterations')
     parser.add_argument('--lr_img', type=float, default=0.1, help='learning rate for updating synthetic images')
     parser.add_argument('--lr_net', type=float, default=0.01, help='learning rate for updating network parameters')
     parser.add_argument('--batch_real', type=int, default=256, help='batch size for real data')
