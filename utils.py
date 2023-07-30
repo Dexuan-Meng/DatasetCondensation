@@ -641,6 +641,24 @@ def rand_cutout(x, param):
     return x
 
 
+class StyleTranslator(nn.Module):
+
+    def __init__(self, in_channel=3, mid_channel=3, out_channel=3, image_size=32, kernel_size=1):
+        super().__init__()
+        self.enc = nn.Conv2d(in_channel, mid_channel, kernel_size)
+        self.scale = nn.Parameter(1. + torch.zeros(1, mid_channel,
+                                  image_size - kernel_size + 1, image_size - kernel_size + 1))
+        self.shift = nn.Parameter(torch.zeros(1, mid_channel,
+                                              image_size - kernel_size + 1, image_size - kernel_size + 1))
+        self.dec = nn.ConvTranspose2d(mid_channel, out_channel, kernel_size)
+
+    def forward(self, x):
+        x = self.enc(x)
+        x = self.scale * x + self.shift
+        x = self.dec(x)
+        return x
+
+
 def save_syn_image():
 
     pass

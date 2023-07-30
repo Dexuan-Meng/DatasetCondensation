@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 import torchvision
 from torchvision.utils import save_image
-from utils import get_loops, get_dataset, get_network, get_eval_pool, evaluate_synset, get_daparam, match_loss, get_time, TensorDataset, epoch, DiffAugment, ParamDiffAug
+from utils import get_loops, get_dataset, get_network, get_eval_pool, evaluate_synset, get_daparam, match_loss, get_time, TensorDataset, epoch, DiffAugment, ParamDiffAug, StyleTranslator
 import wandb
 from contrastive_loss import *
 
@@ -102,9 +102,20 @@ def main(args):
         best_std.append({m: 0 for m in model_eval_pool})
 
         ''' training '''
+        ### ### ### ### ###
+        image_syn = image_syn.detach().to(args.device).requires_grad_(True)
+        styles = styles.to(args.device) # Exactly, the so called Hallucinator.
+        sim_content_net = sim_content_net.to(args.device) # Extractor, return both feature vectors and logits
+
         optimizer_img = torch.optim.SGD([image_syn, ], lr=args.lr_img, momentum=0.5) # optimizer_img for synthetic data
+        # optimizer_img = torch.optim.SGD([image_syn], lr=args.lr_img, momentum=0.95) # from ddfac
         optimizer_img.zero_grad()
         criterion = nn.CrossEntropyLoss().to(args.device)
+
+        ### ### ### ### ###
+        optimizer_style = torch.optim.SGD(styles.parameters(), lr=args.lr_style, momentum=0.95)
+        optimizer_sim_content = torch.optim.SGD(sim_content_net.parameters(), lr=0.001, momentum=0.9)
+        contrast = SupConLoss().to(args.device)
 
         start_time = time.time()
         print('%s training begins'%get_time())
