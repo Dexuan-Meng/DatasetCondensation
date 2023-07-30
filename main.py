@@ -25,6 +25,8 @@ def main(args):
         os.mkdir(args.save_path)
 
     eval_it_pool = np.arange(0, args.Iteration+1, 500).tolist() if args.eval_mode == 'S' or args.eval_mode == 'SS' else [args.Iteration] # The list of iterations when we evaluate models and record results.
+    if args.Iteration not in eval_it_pool:
+        eval_it_pool.append(args.Iteration)
     print('eval_it_pool: ', eval_it_pool)
     channel, im_size, num_classes, class_names, mean, std, dst_train, dst_test, testloader = get_dataset(args.dataset, args.data_path)
     model_eval_pool = get_eval_pool(args.eval_mode, args.model, args.model)
@@ -87,6 +89,9 @@ def main(args):
         else:
             print('initialize synthetic data from random noise')
 
+        # Initialize the best recorder
+        best_acc.append({m: 0 for m in model_eval_pool})
+        best_std.append({m: 0 for m in model_eval_pool})
 
         ''' training '''
         optimizer_img = torch.optim.SGD([image_syn, ], lr=args.lr_img, momentum=0.5) # optimizer_img for synthetic data
@@ -119,11 +124,7 @@ def main(args):
                     else:
                         args.epoch_eval_train = 300
 
-                    accs = []
-                    for it_eval in range(args.num_eval):
-                        net_eval = get_network(model_eval, channel, num_classes, im_size).to(args.device) # get a random model
-                        image_syn_eval, label_syn_eval = copy.deepcopy(image_syn.detach()), copy.deepcopy(label_syn.detach()) # avoid any unaware modification
-                        _, acc_train, acc_test = evaluate_synset(it_eval, net_eval, image_syn_eval, label_syn_eval, testloader, args)
+
                         accs.append(acc_test)
 
                     # pack these into a function in utils.py
@@ -136,16 +137,16 @@ def main(args):
                     print('Evaluate %d random %s, mean = %.4f std = %.4f\n-------------------------'%(len(accs), model_eval, np.mean(accs), np.std(accs)))
                     
                     wandb.log({'Accuracy/{}'.format(model_eval): acc_test_mean}, step=it)
-                    wandb.log({'Max_Accuracy/{}'.format(model_eval): best_acc[model_eval]}, step=it)
+                    wandb.log({'Max_Accuracy/{}'.format(model_eval): best_acc[exp][model_eval]}, step=it)
                     wandb.log({'Std/{}'.format(model_eval): acc_test_std}, step=it)
-                    wandb.log({'Max_Std/{}'.format(model_eval): best_std[model_eval]}, step=it)
+                    wandb.log({'Max_Std/{}'.format(model_eval): best_std[exp][model_eval]}, step=it)
 
                     if it == args.Iteration: # record the final results
                         accs_all_exps[model_eval] += accs
 
             if it in eval_it_pool and (save_this_it or it % 1000 == 0):
                 with torch.no_grad():
-                    image_save = image_syn.flatten(0, 1).detach()
+                    image_save = image_syn.detach()
 
                     save_to_local = False
                     if save_to_local:
@@ -292,7 +293,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_exp', type=int, default=1, help='the number of experiments')
     parser.add_argument('--num_eval', type=int, default=3, help='the number of evaluating randomly initialized models')
     parser.add_argument('--epoch_eval_train', type=int, default=300, help='epochs to train a model with synthetic data')
-    parser.add_argument('--Iteration', type=int, default=10, help='training iterations')
+    parser.add_argument('--Iteration', type=int, default=1500, help='training iterations')
     parser.add_argument('--lr_img', type=float, default=0.1, help='learning rate for updating synthetic images')
     parser.add_argument('--lr_net', type=float, default=0.01, help='learning rate for updating network parameters')
     parser.add_argument('--batch_real', type=int, default=256, help='batch size for real data')
