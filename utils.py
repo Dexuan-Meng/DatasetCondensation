@@ -664,6 +664,20 @@ def save_syn_image():
     pass
 
 
+def get_twin_image(image_base, label_syn, styles, args, num_classes, shuffle=True):
+    if shuffle:
+            indices = torch.randperm(num_classes * args.ipc, device=args.device)
+            base = image_base[indices, :, :, :]
+            label = label_syn[indices]
+    style_idx = torch.randperm(args.n_style, device=args.device)[:2]
+    style_0 = styles[style_idx[0]]
+    image_syn_0 = style_0(base)
+    style_1 = styles[style_idx[1]]
+    image_syn_1 = style_1(base)
+    image_syn_twin = torch.cat([image_syn_0, image_syn_1], dim=0) # At the next step, logits and feature vectors are computed # Two composed image in one tensor computed. 
+    
+    return label, image_syn_twin
+
 AUGMENT_FNS = {
     'color': [rand_brightness, rand_saturation, rand_contrast],
     'crop': [rand_crop],
