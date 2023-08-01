@@ -277,7 +277,7 @@ def get_loops(ipc):
     # Get the two hyper-parameters of outer-loop and inner-loop.
     # The following values are empirically good.
     if ipc == 1:
-        outer_loop, inner_loop = 1, 1
+        outer_loop, inner_loop = 2, 1
     elif ipc == 10:
         outer_loop, inner_loop = 10, 50
     elif ipc == 20:

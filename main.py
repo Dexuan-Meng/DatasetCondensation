@@ -43,11 +43,13 @@ def main(args):
     for key in model_eval_pool:
         accs_all_exps[key] = []
 
-    # wandb.init(sync_tensorboard=False,
-    #            project="DC-Fac",
-    #            job_type="CleanRepo",
-    #            config=args
-    #            )
+    if not SWEEP:
+        wandb.init(sync_tensorboard=False,
+                   project="DC-Fac",
+                   job_type="CleanRepo",
+                   config=args
+                   )
+
     for key in args.__dict__:
         wandb.config.update({key: args.__dict__[key]})
 
@@ -59,6 +61,9 @@ def main(args):
     data_save = []
     best_acc = []
     best_std = []
+
+    loss_recorder = torch.zeros(size=(7, args.Iteration+1), device='cpu')
+    # record the loss of each iter. 7 columns for 7 losses
 
     for exp in range(args.num_exp):
         print('\n================== Exp %d ==================\n '%exp)
@@ -329,7 +334,17 @@ def main(args):
                     "Cls_Content_Loss": cls_content_loss.detach().cpu(),
                     "Likeli_Content_Loss": likeli_content_loss.detach().cpu(),
                     "Contrast_Content_Loss": contrast_content_loss.detach().cpu()}, step = it)
-                # wandb.log({"Loss": loss.detach().cpu()}, step = it)
+                
+                loss_list = [loss.detach().cpu(), 
+                             matching_loss.detach().cpu(), 
+                             club_content_loss.detach().cpu(), 
+                             sim_content_loss.detach().cpu(), 
+                             cls_content_loss.detach().cpu(), 
+                             likeli_content_loss.detach().cpu(), 
+                             contrast_content_loss.detach().cpu()]
+                
+                for i in range(loss_recorder.shape[0]):
+                    loss_recorder[i, it] = loss_list[i]
                 
                 if ol == args.outer_loop - 1:
                     break
@@ -337,7 +352,12 @@ def main(args):
 
                 ''' update network '''
                 image_base_train, label_syn_train = copy.deepcopy(image_base.detach()), copy.deepcopy(label_syn.detach())  # avoid any unaware modification
-                dst_syn_train = TensorDataset(image_base_train, label_syn_train)
+                image_syn_train = image_syn = styles[0](image_base_train)
+                label_syn_train = label_syn_train.repeat(5)
+                for i in range(len(styles) - 1):
+                    image_syn_train = torch.cat([image_syn_train, styles[i + 1](image_base_train)], dim=0)
+
+                dst_syn_train = TensorDataset(image_syn_train, label_syn_train)
                 trainloader = torch.utils.data.DataLoader(dst_syn_train, batch_size=args.batch_train, shuffle=True, num_workers=0)
                 for il in range(args.inner_loop):
                     epoch('train', trainloader, net, optimizer_net, criterion, args, aug = True if args.dsa else False)
@@ -356,9 +376,17 @@ def main(args):
                 print('%s iter = %04d, loss = %.4f' % (get_time(), it, loss_avg))
 
         wandb.log({"Avg_Time_Cost_per_Iter": (time.time() - start_time) / args.Iteration})
+        std_list = torch.var(loss_recorder, dim=1).tolist() 
+        wandb.log({"Grand_Loss_std": std_list[0],
+                "Matching_loss_std": std_list[1],
+                "Club_Content_Loss_std": std_list[2],
+                "Sim_Content_Loss_std": std_list[3],
+                "Cls_Content_Loss_std": std_list[4],
+                "Likeli_Content_Loss_std": std_list[5],
+                "Contrast_Content_Loss_std": std_list[6]})
 
-
-    # wandb.finish()  
+    if not SWEEP:
+        wandb.finish()  
 
     print('\n==================== Final Results ====================\n')
     for key in model_eval_pool:
@@ -367,9 +395,9 @@ def main(args):
 
 
 # if __name__ == '__main__':
-def parser():
 
-    wandb.init(sync_tensorboard=False, project="DC-Fac")
+SWEEP = False
+if not SWEEP:
 
     parser = argparse.ArgumentParser(description='Parameter Processing')
     parser.add_argument('--method', type=str, default='DC', help='DC/DSA')
@@ -391,69 +419,107 @@ def parser():
     parser.add_argument('--n_style', type=int, default=5, help='the number of styles')
     parser.add_argument('--single_channel', action='store_true', help="using single-channel but more basis")
 
-    # parser.add_argument('--lr_img', type=float, default=0.5, help='learning rate for updating synthetic images')
-    # parser.add_argument('--lr_net', type=float, default=0.05, help='learning rate for updating network parameters')
-    # parser.add_argument('--lr_style', type=float, default=0.003, help='learning rate for updating style translator')
-    # parser.add_argument('--lr_extractor', type=float, default=0.007, help='learning rate for updating extractor')
-    # parser.add_argument('--lambda_club_content', type=float, default=0.14)
-    # parser.add_argument('--lambda_likeli_content', type=float, default=1.2)
-    # parser.add_argument('--lambda_cls_content', type=float, default=10.)
-    # parser.add_argument('--lambda_contrast_content', type=float, default=1.)
+    parser.add_argument('--lr_img', type=float, default=0.5, help='learning rate for updating synthetic images')
+    parser.add_argument('--lr_net', type=float, default=0.05, help='learning rate for updating network parameters')
+    parser.add_argument('--lr_style', type=float, default=0.005, help='learning rate for updating style translator')
+    parser.add_argument('--lr_extractor', type=float, default=0.05, help='learning rate for updating extractor')
+    parser.add_argument('--lambda_club_content', type=float, default=2.8)
+    parser.add_argument('--lambda_likeli_content', type=float, default=0.228)
+    parser.add_argument('--lambda_cls_content', type=float, default=13.)
+    parser.add_argument('--lambda_contrast_content', type=float, default=0.228)
 
-    parser.add_argument('--lr_img', type=float, default=wandb.config.lr_img, help='learning rate for updating synthetic images')
-    parser.add_argument('--lr_net', type=float, default=wandb.config.lr_net, help='learning rate for updating network parameters')
-    parser.add_argument('--lr_style', type=float, default=wandb.config.lr_style, help='learning rate for updating style translator')
-    parser.add_argument('--lr_extractor', type=float, default=wandb.config.lr_extractor, help='learning rate for updating extractor')
-    parser.add_argument('--lambda_club_content', type=float, default=wandb.config.lambda_club_content)
-    parser.add_argument('--lambda_likeli_content', type=float, default=wandb.config.lambda_club_content)
-    parser.add_argument('--lambda_cls_content', type=float, default=wandb.config.lambda_cls_content)
-    parser.add_argument('--lambda_contrast_content', type=float, default=wandb.config.lambda_club_content)
-
-    parser.add_argument('--Iteration', type=int, default=wandb.config.Iteration, help='training iterations')    
+    parser.add_argument('--Iteration', type=int, default=200, help='training iterations')    
     parser.add_argument('--eval_it', type=int, default=100, help='how often to evaluate')
     ####################################################################################
     args = parser.parse_args()
 
-
     main(args)
 
+else:
+    def parser():
 
-sweep_configuration = {
-    'name': 'sweep-initial-screening-3',
-    # 'name': 'sweep-dummy',
-    'method': 'random',
-    'metric': 
-    {
-        'goal': 'maximize', 
-        'name': 'Max_Accuracy'
-        },
-    'parameters': 
-    {   
-        'Iteration': {'value': 200},
+        wandb.init(sync_tensorboard=False, project="DC-Fac")
 
-        'lr_img': {'values': [0.5]},
-        'lr_net': {'values': [0.05]},
-        'lr_style': {'value': 0.01},
-        'lr_extractor': {'values': [0.01, 0.05]},
-        'lambda_club_content': {'value': 100},  
-        # 'lambda_likeli_content': {'value': 1.2},
-        'lambda_cls_content': {'value': 100},
+        parser = argparse.ArgumentParser(description='Parameter Processing')
+        parser.add_argument('--method', type=str, default='DC', help='DC/DSA')
+        parser.add_argument('--dataset', type=str, default='CIFAR10', help='dataset')
+        parser.add_argument('--model', type=str, default='ConvNet', help='model')
+        parser.add_argument('--ipc', type=int, default=1, help='image(s) per class')
+        parser.add_argument('--eval_mode', type=str, default='S', help='eval_mode') # S: the same to training model, M: multi architectures,  W: net width, D: net depth, A: activation function, P: pooling layer, N: normalization layer,
+        parser.add_argument('--num_exp', type=int, default=1, help='the number of experiments')
+        parser.add_argument('--num_eval', type=int, default=3, help='the number of evaluating randomly initialized models')
+        parser.add_argument('--epoch_eval_train', type=int, default=300, help='epochs to train a model with synthetic data')
+        parser.add_argument('--batch_real', type=int, default=256, help='batch size for real data')
+        parser.add_argument('--batch_train', type=int, default=256, help='batch size for training networks')
+        parser.add_argument('--init', type=str, default='noise', help='noise/real: initialize synthetic images from random noise or randomly sampled real images.')
+        parser.add_argument('--dsa_strategy', type=str, default='None', help='differentiable Siamese augmentation strategy')
+        parser.add_argument('--data_path', type=str, default='data', help='dataset path')
+        parser.add_argument('--save_path', type=str, default='result', help='path to save results')
+        parser.add_argument('--dis_metric', type=str, default='ours', help='distance metric')
+        ####################################################################################
+        parser.add_argument('--n_style', type=int, default=5, help='the number of styles')
+        parser.add_argument('--single_channel', action='store_true', help="using single-channel but more basis")
+        # parser.add_argument('--lr_img', type=float, default=0.5, help='learning rate for updating synthetic images')
+        # parser.add_argument('--lr_net', type=float, default=0.05, help='learning rate for updating network parameters')
+        # parser.add_argument('--lr_style', type=float, default=0.003, help='learning rate for updating style translator')
+        # parser.add_argument('--lr_extractor', type=float, default=0.007, help='learning rate for updating extractor')
+        # parser.add_argument('--lambda_club_content', type=float, default=0.14)
+        # parser.add_argument('--lambda_likeli_content', type=float, default=1.2)
+        # parser.add_argument('--lambda_cls_content', type=float, default=10.)
+        # parser.add_argument('--lambda_contrast_content', type=float, default=1.)
 
-        # 'lr_img': {'distribution': 'log_uniform', 'max': 0, 'min': -4.6},
-        # 'lr_net': {'distribution': 'log_uniform', 'max': -2.3, 'min': -6.9},
-        # 'lr_style': {'distribution': 'log_uniform', 'max': -3, 'min': -9.2},
-        # 'lr_extractor': {'distribution': 'log_uniform', 'max': -1.6, 'min': -3.9},
-        # 'lambda_club_content': {'distribution': 'log_uniform', 'max': 4.6, 'min': 0},  
-        # 'lambda_likeli_content': {'distribution': 'log_uniform', 'max': 4.6, 'min': -4.6},
-        'lambda_cls_content': {'distribution': 'log_uniform', 'max': 2.99, 'min': 1.6},
-        # 'lambda_contrast_content': {'distribution': 'log_uniform', 'max': 4.6, 'min': -4.6}
-     }
-}
+        parser.add_argument('--lr_img', type=float, default=wandb.config.lr_img, help='learning rate for updating synthetic images')
+        parser.add_argument('--lr_net', type=float, default=wandb.config.lr_net, help='learning rate for updating network parameters')
+        parser.add_argument('--lr_style', type=float, default=wandb.config.lr_style, help='learning rate for updating style translator')
+        parser.add_argument('--lr_extractor', type=float, default=wandb.config.lr_extractor, help='learning rate for updating extractor')
+        parser.add_argument('--lambda_club_content', type=float, default=wandb.config.lambda_club_content)
+        parser.add_argument('--lambda_likeli_content', type=float, default=wandb.config.lambda_likeli_content)
+        parser.add_argument('--lambda_cls_content', type=float, default=wandb.config.lambda_cls_content)
+        parser.add_argument('--lambda_contrast_content', type=float, default=wandb.config.lambda_likeli_content)
 
-# 3: Start the sweep
-sweep_id = wandb.sweep(
-    sweep=sweep_configuration, 
-    project='DC-Fac'
-    )
+        parser.add_argument('--Iteration', type=int, default=wandb.config.Iteration, help='training iterations')    
+        parser.add_argument('--eval_it', type=int, default=100, help='how often to evaluate')
+        ####################################################################################
+        args = parser.parse_args()
+        main(args)
 
-wandb.agent(sweep_id, function=parser, count=2)
+
+    sweep_configuration = {
+        # 'name': 'sweep-initial-screening-6',
+        'name': 'sweep-dummy',
+        'method': 'random',
+        'metric': 
+        {
+            'goal': 'maximize', 
+            'name': 'Max_Accuracy'
+            },
+        'parameters': 
+        {   
+            'Iteration': {'value': 1500},
+
+            'lr_img': {'values': [0.5]},
+            'lr_net': {'values': [0.05]},
+            'lr_style': {'values': [0.005]},
+            'lr_extractor': {'values': [0.05]},
+            'lambda_club_content': {'value': 10},  
+            'lambda_likeli_content': {'value': 10},
+            'lambda_cls_content': {'value': 10},
+
+            # 'lr_img': {'distribution': 'log_uniform', 'max': 0, 'min': -4.6},
+            # 'lr_net': {'distribution': 'log_uniform', 'max': -2.3, 'min': -6.9},
+            # 'lr_style': {'distribution': 'log_uniform', 'max': -3, 'min': -9.2},
+            # 'lr_extractor': {'distribution': 'log_uniform', 'max': -1.6, 'min': -3.9},
+            # 'lambda_club_content': {'distribution': 'log_uniform', 'max': 4.6, 'min': 0},  
+            # 'lambda_likeli_content': {'distribution': 'log_uniform', 'max': 6.9, 'min': -2.3},
+            # 'lambda_cls_content': {'distribution': 'log_uniform', 'max': 2.99, 'min': 1.6},
+            # 'lambda_contrast_content': {'distribution': 'log_uniform', 'max': 4.6, 'min': -4.6}
+        }
+    }
+
+    # 3: Start the sweep
+    sweep_id = wandb.sweep(
+        sweep=sweep_configuration, 
+        project='DC-Fac'
+        )
+
+    wandb.agent(sweep_id, function=parser, count=1)
