@@ -17,6 +17,7 @@ def main(args):
     args.device = 'cuda' if torch.cuda.is_available() else 'cpu'
     args.dsa_param = ParamDiffAug()
     args.dsa = True if args.method == 'DSA' else False
+    args.tag = args.tag + str(int(time.time() * 1000) % 100000)
 
     if not os.path.exists(args.data_path):
         os.mkdir(args.data_path)
@@ -24,10 +25,14 @@ def main(args):
     if not os.path.exists(args.save_path):
         os.mkdir(args.save_path)
 
-    eval_it_pool = np.arange(0, args.Iteration+1, 500).tolist() if args.eval_mode == 'S' or args.eval_mode == 'SS' else [args.Iteration] # The list of iterations when we evaluate models and record results.
+    eval_it_pool = np.arange(0, args.Iteration+1, 500).tolist() \
+        if args.eval_mode == 'S' or args.eval_mode == 'SS' else [args.Iteration] # The list of iterations when we evaluate models and record results.
+    if 0.1 * args.Iteration < 500:
+        eval_it_pool.append(round(0.9 * args.Iteration))
     if args.Iteration not in eval_it_pool:
         eval_it_pool.append(args.Iteration)
     print('eval_it_pool: ', eval_it_pool)
+
     channel, im_size, num_classes, class_names, mean, std, dst_train, dst_test, testloader = get_dataset(args.dataset, args.data_path)
     model_eval_pool = get_eval_pool(args.eval_mode, args.model, args.model)
 
@@ -36,24 +41,34 @@ def main(args):
     for key in model_eval_pool:
         accs_all_exps[key] = []
 
-    wandb.init(sync_tensorboard=False,
-               project="DC-Fac",
-               job_type="CleanRepo",
-               config=args
-               )
-    args = type('', (), {})()
+    # wandb.init(sync_tensorboard=False,
+    #            project="DC-Fac",
+    #            job_type="CleanRepo",
+    #            config=args
+    #            )
+    # args = type('', (), {})()
 
-    for key in wandb.config._items:
-        setattr(args, key, wandb.config._items[key])
+    # for key in wandb.config._items:
+    #     setattr(args, key, wandb.config._items[key])
     
     data_save = []
     best_acc = []
     best_std = []
 
     for exp in range(args.num_exp):
-        print('\n================== Exp %d ==================\n '%exp)
-        print('Hyper-parameters: \n', args.__dict__)
-        print('Evaluation model pool: ', model_eval_pool)
+
+        wandb.init(sync_tensorboard=False,
+                project="DC-Fac",
+                job_type="CleanRepo",
+                config=args
+                )
+        args = type('', (), {})()
+
+        for key in wandb.config._items:
+            setattr(args, key, wandb.config._items[key])
+            print('\n================== Exp %d ==================\n '%exp)
+            print('Hyper-parameters: \n', args.__dict__)
+            print('Evaluation model pool: ', model_eval_pool)
 
         ''' organize the real dataset '''
         images_all = []
@@ -222,6 +237,8 @@ def main(args):
 
                 ''' update synthetic data '''
                 loss = torch.tensor(0.0).to(args.device)
+                matching_loss = torch.tensor(0.0).to(args.device)
+
                 for c in range(num_classes):
                     img_real = get_images(c, args.batch_real)
                     lab_real = torch.ones((img_real.shape[0],), device=args.device, dtype=torch.long) * c
@@ -242,22 +259,16 @@ def main(args):
                     loss_syn = criterion(output_syn, lab_syn)
                     gw_syn = torch.autograd.grad(loss_syn, net_parameters, create_graph=True)
 
-                    loss += match_loss(gw_syn, gw_real, args)
-
+                    matching_loss += match_loss(gw_syn, gw_real, args) / num_classes
+                
+                loss = matching_loss
                 optimizer_img.zero_grad()
                 loss.backward()
                 optimizer_img.step()
                 loss_avg += loss.item()
 
-                # wandb.log({"Grand_Loss": grand_loss.detach().cpu(),
-                #     "Param_Loss": param_loss.detach().cpu(),
-                #     "Club_Content_Loss": club_content_loss.detach().cpu(),
-                #     "Sim_Content_Loss": sim_content_loss.detach().cpu(),
-                #     "Cls_Content_Loss": cls_content_loss.detach().cpu(),
-                #     "Likeli_Content_Loss": likeli_content_loss.detach().cpu(),
-                #     "Contrast_Content_Loss": contrast_content_loss.detach().cpu(),
-                #     "Start_Epoch": start_epoch}, step = it)
-                wandb.log({"Loss": loss.detach().cpu()}, step = it)
+                wandb.log({"Grand_Loss": loss.detach().cpu(),
+                           "Matching_Loss": matching_loss.detach().cpu()}, step = it)
                 
                 if ol == args.outer_loop - 1:
                     break
@@ -270,7 +281,7 @@ def main(args):
                 for il in range(args.inner_loop):
                     epoch('train', trainloader, net, optimizer_net, criterion, args, aug = True if args.dsa else False)
 
-            loss_avg /= (num_classes*args.outer_loop)
+            loss_avg /= args.outer_loop
 
             if it%10 == 0:
                 print('%s iter = %04d, loss = %.4f' % (get_time(), it, loss_avg))
@@ -278,7 +289,7 @@ def main(args):
             wandb.log({"Time_Cost": time.time() - start_time}, step = it)
 
 
-    wandb.finish()  
+        wandb.finish()  
 
     print('\n==================== Final Results ====================\n')
     for key in model_eval_pool:
@@ -294,10 +305,10 @@ if __name__ == '__main__':
     parser.add_argument('--model', type=str, default='ConvNet', help='model')
     parser.add_argument('--ipc', type=int, default=1, help='image(s) per class')
     parser.add_argument('--eval_mode', type=str, default='S', help='eval_mode') # S: the same to training model, M: multi architectures,  W: net width, D: net depth, A: activation function, P: pooling layer, N: normalization layer,
-    parser.add_argument('--num_exp', type=int, default=1, help='the number of experiments')
-    parser.add_argument('--num_eval', type=int, default=3, help='the number of evaluating randomly initialized models')
+    parser.add_argument('--num_exp', type=int, default=5, help='the number of experiments')
+    parser.add_argument('--num_eval', type=int, default=5, help='the number of evaluating randomly initialized models')
     parser.add_argument('--epoch_eval_train', type=int, default=300, help='epochs to train a model with synthetic data')
-    parser.add_argument('--Iteration', type=int, default=15, help='training iterations')
+    parser.add_argument('--Iteration', type=int, default=1500, help='training iterations')
     parser.add_argument('--lr_img', type=float, default=0.1, help='learning rate for updating synthetic images')
     parser.add_argument('--lr_net', type=float, default=0.01, help='learning rate for updating network parameters')
     parser.add_argument('--batch_real', type=int, default=256, help='batch size for real data')
@@ -307,7 +318,7 @@ if __name__ == '__main__':
     parser.add_argument('--data_path', type=str, default='data', help='dataset path')
     parser.add_argument('--save_path', type=str, default='result', help='path to save results')
     parser.add_argument('--dis_metric', type=str, default='ours', help='distance metric')
-
+    parser.add_argument('--tag', type=str, default='DC-ipc1', help='Tag for grouping in wandb')
     args = parser.parse_args()
     main(args)
 
