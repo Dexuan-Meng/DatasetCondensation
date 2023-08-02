@@ -162,7 +162,11 @@ def main(args):
                     for it_eval in range(args.num_eval):
                         net_eval = get_network(model_eval, channel, num_classes, im_size).to(args.device) # get a random model
                         image_base_eval, label_syn_eval = copy.deepcopy(image_base.detach()), copy.deepcopy(label_syn.detach()) # avoid any unaware modification
-                        _, _, acc_test = evaluate_synset(it_eval, net_eval, image_base_eval, label_syn_eval, testloader, args)
+                        image_syn_eval = styles[0](image_base_eval)
+                        label_syn_eval = label_syn_eval.repeat(5)
+                        for i in range(len(styles) - 1):
+                            image_syn_eval = torch.cat([image_syn_eval, styles[i + 1](image_base_eval)], dim=0)
+                        _, _, acc_test = evaluate_synset(it_eval, net_eval, image_syn_eval, label_syn_eval, testloader, args)
                         accs.append(acc_test)
 
                     # pack these into a function in utils.py
@@ -236,6 +240,7 @@ def main(args):
             # Mute the DC augmentation when learning synthetic data (in inner-loop epoch function) in order 
             # to be consistent with DC paper.
 
+            style_indices_chunks = []
 
             for ol in range(args.outer_loop):
 
@@ -264,15 +269,31 @@ def main(args):
                 matching_loss = torch.tensor(0.0).to(args.device)
 
                 ### ### ### ### ###
-                style_idx = random.randint(0, args.n_style - 1)
-                style = styles[style_idx]
-                image_syn = style(image_base)
-
+                # if not style_indices_chunks:
+                #     style_indices = torch.randperm(len(styles), device=args.device)
+                #     style_indices_chunks = list(torch.split(style_indices, 1))
+                # style_idx = style_indices_chunks.pop()
+                # style = styles[style_idx]
+                # image_syn = style(image_base)
+                image_syn = styles[0](image_base).unsqueeze(1)
+                for i in range(len(styles) - 1):
+                    image_syn = torch.cat([image_syn, styles[i + 1](image_base).unsqueeze(1)], dim=1)
+                image_syn = torch.flatten(image_syn, start_dim=0, end_dim=1)
                 for c in range(num_classes):
+                    
+                    # style_idx = random.randint(0, args.n_style - 1)
+                    # style = styles[style_idx]
+                    # image_syn = style(image_base)
+
+                    # img_real = get_images(c, args.batch_real)
+                    # lab_real = torch.ones((img_real.shape[0],), device=args.device, dtype=torch.long) * c
+                    # img_syn = image_syn[c*args.ipc:(c+1)*args.ipc].reshape((args.ipc, channel, im_size[0], im_size[1]))
+                    # lab_syn = torch.ones((args.ipc,), device=args.device, dtype=torch.long) * c
+
                     img_real = get_images(c, args.batch_real)
                     lab_real = torch.ones((img_real.shape[0],), device=args.device, dtype=torch.long) * c
-                    img_syn = image_syn[c*args.ipc:(c+1)*args.ipc].reshape((args.ipc, channel, im_size[0], im_size[1]))
-                    lab_syn = torch.ones((args.ipc,), device=args.device, dtype=torch.long) * c
+                    img_syn = image_syn[c*args.ipc*args.n_style:(c+1)*args.ipc*args.n_style].reshape((args.ipc * args.n_style, channel, im_size[0], im_size[1]))
+                    lab_syn = torch.ones((img_syn.shape[0],), device=args.device, dtype=torch.long) * c
 
                     if args.dsa:
                         seed = int(time.time() * 1000) % 100000
@@ -300,15 +321,11 @@ def main(args):
                 loss = matching_loss + club_content_loss * args.lambda_club_content
 
                 optimizer_img.zero_grad()
-
-                ### ### ### ### ###
                 optimizer_style.zero_grad()
-
                 loss.backward()
                 optimizer_img.step()
+                optimizer_style.step()
 
-                ### ### ### ### ###
-                optimizer_style.step()               
                 loss_avg += loss.item()
 
                 ### ### ### ### ###
@@ -324,8 +341,10 @@ def main(args):
                 sim_content_loss = cls_content_loss * args.lambda_cls_content + likeli_content_loss * args.lambda_likeli_content + contrast_content_loss * args.lambda_contrast_content
                 
                 optimizer_sim_content.zero_grad()
+                # optimizer_style.zero_grad()
                 sim_content_loss.backward()
                 optimizer_sim_content.step()
+                # optimizer_style.step()
 
                 wandb.log({"Grand_Loss": loss.detach().cpu(),
                     "Matching_loss": matching_loss.detach().cpu(),
@@ -351,16 +370,17 @@ def main(args):
 
 
                 ''' update network '''
-                image_base_train, label_syn_train = copy.deepcopy(image_base.detach()), copy.deepcopy(label_syn.detach())  # avoid any unaware modification
-                image_syn_train = image_syn = styles[0](image_base_train)
-                label_syn_train = label_syn_train.repeat(5)
-                for i in range(len(styles) - 1):
-                    image_syn_train = torch.cat([image_syn_train, styles[i + 1](image_base_train)], dim=0)
+                if not style_indices_chunks:
+                    image_base_train, label_syn_train = copy.deepcopy(image_base.detach()), copy.deepcopy(label_syn.detach())  # avoid any unaware modification
+                    image_syn_train = styles[0](image_base_train)
+                    label_syn_train = label_syn_train.repeat(5)
+                    for i in range(len(styles) - 1):
+                        image_syn_train = torch.cat([image_syn_train, styles[i + 1](image_base_train)], dim=0)
 
-                dst_syn_train = TensorDataset(image_syn_train, label_syn_train)
-                trainloader = torch.utils.data.DataLoader(dst_syn_train, batch_size=args.batch_train, shuffle=True, num_workers=0)
-                for il in range(args.inner_loop):
-                    epoch('train', trainloader, net, optimizer_net, criterion, args, aug = True if args.dsa else False)
+                    dst_syn_train = TensorDataset(image_syn_train, label_syn_train)
+                    trainloader = torch.utils.data.DataLoader(dst_syn_train, batch_size=args.batch_train, shuffle=True, num_workers=0)
+                    for il in range(args.inner_loop):
+                        epoch('train', trainloader, net, optimizer_net, criterion, args, aug = True if args.dsa else False)
 
             loss_avg /= (args.outer_loop)
 
@@ -396,7 +416,7 @@ def main(args):
 
 # if __name__ == '__main__':
 
-SWEEP = False
+SWEEP = True
 if not SWEEP:
 
     parser = argparse.ArgumentParser(description='Parameter Processing')
@@ -421,9 +441,9 @@ if not SWEEP:
 
     parser.add_argument('--lr_img', type=float, default=0.5, help='learning rate for updating synthetic images')
     parser.add_argument('--lr_net', type=float, default=0.05, help='learning rate for updating network parameters')
-    parser.add_argument('--lr_style', type=float, default=0.005, help='learning rate for updating style translator')
+    parser.add_argument('--lr_style', type=float, default=0.0005, help='learning rate for updating style translator')
     parser.add_argument('--lr_extractor', type=float, default=0.05, help='learning rate for updating extractor')
-    parser.add_argument('--lambda_club_content', type=float, default=2.8)
+    parser.add_argument('--lambda_club_content', type=float, default=2.82)
     parser.add_argument('--lambda_likeli_content', type=float, default=0.228)
     parser.add_argument('--lambda_cls_content', type=float, default=13.)
     parser.add_argument('--lambda_contrast_content', type=float, default=0.228)
@@ -475,7 +495,7 @@ else:
         parser.add_argument('--lambda_club_content', type=float, default=wandb.config.lambda_club_content)
         parser.add_argument('--lambda_likeli_content', type=float, default=wandb.config.lambda_likeli_content)
         parser.add_argument('--lambda_cls_content', type=float, default=wandb.config.lambda_cls_content)
-        parser.add_argument('--lambda_contrast_content', type=float, default=wandb.config.lambda_likeli_content)
+        parser.add_argument('--lambda_contrast_content', type=float, default=wandb.config.lambda_contrast_content)
 
         parser.add_argument('--Iteration', type=int, default=wandb.config.Iteration, help='training iterations')    
         parser.add_argument('--eval_it', type=int, default=100, help='how often to evaluate')
@@ -485,8 +505,8 @@ else:
 
 
     sweep_configuration = {
-        # 'name': 'sweep-initial-screening-6',
-        'name': 'sweep-dummy',
+        # 'name': 'sweep-HparamsTuning-1',
+        'name': 'sweep-HparamsTest-2(iter=1500)',
         'method': 'random',
         'metric': 
         {
@@ -500,10 +520,11 @@ else:
             'lr_img': {'values': [0.5]},
             'lr_net': {'values': [0.05]},
             'lr_style': {'values': [0.005]},
-            'lr_extractor': {'values': [0.05]},
+            'lr_extractor': {'values': [0.005]},
             'lambda_club_content': {'value': 10},  
-            'lambda_likeli_content': {'value': 10},
-            'lambda_cls_content': {'value': 10},
+            'lambda_likeli_content': {'value': 1},
+            'lambda_cls_content': {'value': 1},
+            'lambda_contrast_content': {'value': 1},
 
             # 'lr_img': {'distribution': 'log_uniform', 'max': 0, 'min': -4.6},
             # 'lr_net': {'distribution': 'log_uniform', 'max': -2.3, 'min': -6.9},
@@ -522,4 +543,4 @@ else:
         project='DC-Fac'
         )
 
-    wandb.agent(sweep_id, function=parser, count=1)
+    wandb.agent(sweep_id, function=parser, count=5)
