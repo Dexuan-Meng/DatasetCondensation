@@ -268,7 +268,7 @@ def main(args):
                 loss_avg += loss.item()
 
                 wandb.log({"Grand_Loss": loss.detach().cpu(),
-                           "Matching_Loss": matching_loss.detach().cpu()}, step = it)
+                           "Matching_loss": matching_loss.detach().cpu()}, step = it)
                 
                 if ol == args.outer_loop - 1:
                     break
@@ -301,11 +301,11 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Parameter Processing')
     parser.add_argument('--method', type=str, default='DC', help='DC/DSA')
-    parser.add_argument('--dataset', type=str, default='CIFAR10', help='dataset')
+    parser.add_argument('--dataset', type=str, default='MNIST', help='dataset')
     parser.add_argument('--model', type=str, default='ConvNet', help='model')
     parser.add_argument('--ipc', type=int, default=1, help='image(s) per class')
     parser.add_argument('--eval_mode', type=str, default='S', help='eval_mode') # S: the same to training model, M: multi architectures,  W: net width, D: net depth, A: activation function, P: pooling layer, N: normalization layer,
-    parser.add_argument('--num_exp', type=int, default=5, help='the number of experiments')
+    parser.add_argument('--num_exp', type=int, default=1, help='the number of experiments')
     parser.add_argument('--num_eval', type=int, default=5, help='the number of evaluating randomly initialized models')
     parser.add_argument('--epoch_eval_train', type=int, default=300, help='epochs to train a model with synthetic data')
     parser.add_argument('--Iteration', type=int, default=1500, help='training iterations')
@@ -318,7 +318,7 @@ if __name__ == '__main__':
     parser.add_argument('--data_path', type=str, default='data', help='dataset path')
     parser.add_argument('--save_path', type=str, default='result', help='path to save results')
     parser.add_argument('--dis_metric', type=str, default='ours', help='distance metric')
-    parser.add_argument('--tag', type=str, default='DC-ipc1', help='Tag for grouping in wandb')
+    parser.add_argument('--tag', type=str, default='DC-ipc1-MNIST', help='Tag for grouping in wandb')
     args = parser.parse_args()
     main(args)
 
