@@ -20,6 +20,8 @@ def main(args):
     args.device = 'cuda' if torch.cuda.is_available() else 'cpu'
     args.dsa_param = ParamDiffAug()
     args.dsa = True if args.method == 'DSA' else False
+    if args.dataset == 'MNIST':
+        args.single_channel = True
 
     if not os.path.exists(args.data_path):
         os.mkdir(args.data_path)
@@ -34,14 +36,6 @@ def main(args):
     if args.Iteration not in eval_it_pool:
         eval_it_pool.append(args.Iteration)
     print('eval_it_pool: ', eval_it_pool)
-
-    channel, im_size, num_classes, _, mean, std, dst_train, _, testloader = get_dataset(args.dataset, args.data_path) # _: class_names, dst_test
-    model_eval_pool = get_eval_pool(args.eval_mode, args.model, args.model)
-
-
-    accs_all_exps = dict() # record performances of all experiments
-    for key in model_eval_pool:
-        accs_all_exps[key] = []
 
     if not SWEEP:
         wandb.init(sync_tensorboard=False,
@@ -58,6 +52,13 @@ def main(args):
     for key in wandb.config._items:
         setattr(args, key, wandb.config._items[key])
     
+    channel, im_size, num_classes, _, mean, std, dst_train, _, testloader = get_dataset(args.dataset, args.data_path) # _: class_names, dst_test
+    model_eval_pool = get_eval_pool(args.eval_mode, args.model, args.model)
+    
+    accs_all_exps = dict() # record performances of all experiments
+    for key in model_eval_pool:
+        accs_all_exps[key] = []
+
     data_save = []
     best_acc = []
     best_std = []
@@ -100,9 +101,10 @@ def main(args):
             requires_grad=False, 
             device=args.device).view(-1) # [0,0,0, 1,1,1, ..., 9,9,9]
         ### ### ### ### ###
-        styles = nn.ModuleList([StyleTranslator(in_channel=1 if args.single_channel else 3, mid_channel=channel, out_channel=channel, kernel_size=3)
+        styles = nn.ModuleList([StyleTranslator(
+            in_channel=1 if args.single_channel else 3, mid_channel=channel, out_channel=channel, kernel_size=3, image_size=im_size[0])
                                 for _ in range(args.n_style)])
-        sim_content_net = Extractor(num_classes)
+        sim_content_net = Extractor(num_classes, channel= channel, image_size=im_size[0])
 
         if args.init == 'real':
             print('initialize synthetic data from random real images')
@@ -416,12 +418,12 @@ def main(args):
 
 # if __name__ == '__main__':
 
-SWEEP = True
+SWEEP = False
 if not SWEEP:
 
     parser = argparse.ArgumentParser(description='Parameter Processing')
     parser.add_argument('--method', type=str, default='DC', help='DC/DSA')
-    parser.add_argument('--dataset', type=str, default='CIFAR10', help='dataset')
+    parser.add_argument('--dataset', type=str, default='MNIST', help='dataset')
     parser.add_argument('--model', type=str, default='ConvNet', help='model')
     parser.add_argument('--ipc', type=int, default=1, help='image(s) per class')
     parser.add_argument('--eval_mode', type=str, default='S', help='eval_mode') # S: the same to training model, M: multi architectures,  W: net width, D: net depth, A: activation function, P: pooling layer, N: normalization layer,
@@ -479,14 +481,6 @@ else:
         ####################################################################################
         parser.add_argument('--n_style', type=int, default=5, help='the number of styles')
         parser.add_argument('--single_channel', action='store_true', help="using single-channel but more basis")
-        # parser.add_argument('--lr_img', type=float, default=0.5, help='learning rate for updating synthetic images')
-        # parser.add_argument('--lr_net', type=float, default=0.05, help='learning rate for updating network parameters')
-        # parser.add_argument('--lr_style', type=float, default=0.003, help='learning rate for updating style translator')
-        # parser.add_argument('--lr_extractor', type=float, default=0.007, help='learning rate for updating extractor')
-        # parser.add_argument('--lambda_club_content', type=float, default=0.14)
-        # parser.add_argument('--lambda_likeli_content', type=float, default=1.2)
-        # parser.add_argument('--lambda_cls_content', type=float, default=10.)
-        # parser.add_argument('--lambda_contrast_content', type=float, default=1.)
 
         parser.add_argument('--lr_img', type=float, default=wandb.config.lr_img, help='learning rate for updating synthetic images')
         parser.add_argument('--lr_net', type=float, default=wandb.config.lr_net, help='learning rate for updating network parameters')
@@ -516,6 +510,8 @@ else:
         'parameters': 
         {   
             'Iteration': {'value': 1500},
+            'tag': {'value': 'DCF-MNIST-1'},
+            'dataset': {'value': 'MNIST'},
 
             'lr_img': {'values': [0.5]},
             'lr_net': {'values': [0.05]},
