@@ -20,8 +20,8 @@ def main(args):
     args.device = 'cuda' if torch.cuda.is_available() else 'cpu'
     args.dsa_param = ParamDiffAug()
     args.dsa = True if args.method == 'DSA' else False
-    if args.dataset == 'MNIST':
-        args.single_channel = True
+    # if args.dataset == 'MNIST':
+    #     args.single_channel = True
 
     if not os.path.exists(args.data_path):
         os.mkdir(args.data_path)
@@ -109,7 +109,10 @@ def main(args):
         if args.init == 'real':
             print('initialize synthetic data from random real images')
             for c in range(num_classes):
-                image_base.data[c*args.ipc:(c+1)*args.ipc] = get_images(c, args.ipc).detach().data
+                if args.single_channel:
+                    image_base.data[c*args.ipc:(c+1)*args.ipc] = get_images(c, args.ipc).detach().data.mean(dim=1, keepdim=True)
+                else:
+                    image_base.data[c*args.ipc:(c+1)*args.ipc] = get_images(c, args.ipc).detach().data
         else:
             print('initialize synthetic data from random noise')
 
