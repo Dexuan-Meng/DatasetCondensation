@@ -20,8 +20,8 @@ def main(args):
     args.device = 'cuda' if torch.cuda.is_available() else 'cpu'
     args.dsa_param = ParamDiffAug()
     args.dsa = True if args.method == 'DSA' else False
-    if args.dataset == 'MNIST':
-        args.single_channel = True
+    # if args.dataset == 'MNIST':
+    #     args.single_channel = True
 
     if not os.path.exists(args.data_path):
         os.mkdir(args.data_path)
@@ -95,7 +95,8 @@ def main(args):
 
 
         ''' initialize the synthetic data '''
-        image_base = torch.randn(size=(num_classes*args.ipc, channel, im_size[0], im_size[1]), dtype=torch.float, requires_grad=True, device=args.device)
+        image_base = torch.randn(size=(num_classes*args.ipc, 1 if args.single_channel else 3, im_size[0], im_size[1]), dtype=torch.float)
+        # else 3 instead channel
         label_syn = torch.tensor([np.ones(args.ipc)*i for i in range(num_classes)], 
             dtype=torch.long, 
             requires_grad=False, 
@@ -104,7 +105,7 @@ def main(args):
         styles = nn.ModuleList([StyleTranslator(
             in_channel=1 if args.single_channel else 3, mid_channel=channel, out_channel=channel, kernel_size=3, image_size=im_size[0])
                                 for _ in range(args.n_style)])
-        sim_content_net = Extractor(num_classes, channel= channel, image_size=im_size[0])
+        sim_content_net = Extractor(num_classes, channel=channel, image_size=im_size[0])
 
         if args.init == 'real':
             print('initialize synthetic data from random real images')
@@ -188,7 +189,7 @@ def main(args):
                     if it == args.Iteration: # record the final results
                         accs_all_exps[model_eval] += accs
 
-            if it in eval_it_pool and (save_this_it or it % 1000 == 0):
+            if it in eval_it_pool and (save_this_it or it % 500 == 0):
                 with torch.no_grad():
                     image_save = image_base.detach()
 
@@ -379,10 +380,10 @@ def main(args):
                     for i in range(len(styles) - 1):
                         image_syn_train = torch.cat([image_syn_train, styles[i + 1](image_base_train)], dim=0)
 
-                    dst_syn_train = TensorDataset(image_syn_train, label_syn_train)
-                    trainloader = torch.utils.data.DataLoader(dst_syn_train, batch_size=args.batch_train, shuffle=True, num_workers=0)
-                    for il in range(args.inner_loop):
-                        epoch('train', trainloader, net, optimizer_net, criterion, args, aug = True if args.dsa else False)
+                dst_syn_train = TensorDataset(image_syn_train, label_syn_train)
+                trainloader = torch.utils.data.DataLoader(dst_syn_train, batch_size=args.batch_train, shuffle=True, num_workers=0)
+                for il in range(args.inner_loop):
+                    epoch('train', trainloader, net, optimizer_net, criterion, args, aug = True if args.dsa else False)
 
             loss_avg /= (args.outer_loop)
 
@@ -418,17 +419,17 @@ def main(args):
 
 # if __name__ == '__main__':
 
-SWEEP = False
+SWEEP = True
 if not SWEEP:
 
     parser = argparse.ArgumentParser(description='Parameter Processing')
     parser.add_argument('--method', type=str, default='DC', help='DC/DSA')
-    parser.add_argument('--dataset', type=str, default='MNIST', help='dataset')
+    parser.add_argument('--dataset', type=str, default='CIFAR10', help='dataset')
     parser.add_argument('--model', type=str, default='ConvNet', help='model')
     parser.add_argument('--ipc', type=int, default=1, help='image(s) per class')
     parser.add_argument('--eval_mode', type=str, default='S', help='eval_mode') # S: the same to training model, M: multi architectures,  W: net width, D: net depth, A: activation function, P: pooling layer, N: normalization layer,
     parser.add_argument('--num_exp', type=int, default=1, help='the number of experiments')
-    parser.add_argument('--num_eval', type=int, default=3, help='the number of evaluating randomly initialized models')
+    parser.add_argument('--num_eval', type=int, default=5, help='the number of evaluating randomly initialized models')
     parser.add_argument('--epoch_eval_train', type=int, default=300, help='epochs to train a model with synthetic data')
     parser.add_argument('--batch_real', type=int, default=256, help='batch size for real data')
     parser.add_argument('--batch_train', type=int, default=256, help='batch size for training networks')
@@ -480,7 +481,7 @@ else:
         parser.add_argument('--dis_metric', type=str, default='ours', help='distance metric')
         ####################################################################################
         parser.add_argument('--n_style', type=int, default=5, help='the number of styles')
-        parser.add_argument('--single_channel', action='store_true', help="using single-channel but more basis")
+        parser.add_argument('--single_channel', type=bool, default=False, help="using single-channel but more basis")
 
         parser.add_argument('--lr_img', type=float, default=wandb.config.lr_img, help='learning rate for updating synthetic images')
         parser.add_argument('--lr_net', type=float, default=wandb.config.lr_net, help='learning rate for updating network parameters')
@@ -510,8 +511,9 @@ else:
         'parameters': 
         {   
             'Iteration': {'value': 1500},
-            'tag': {'value': 'DCF-MNIST-1'},
-            'dataset': {'value': 'MNIST'},
+            'single_channel': {'value': False},
+            'tag': {'value': 'DCF-CIFAR10-ImageLog'},
+            'dataset': {'value': 'CIFAR10'},
 
             'lr_img': {'values': [0.5]},
             'lr_net': {'values': [0.05]},
@@ -539,4 +541,4 @@ else:
         project='DC-Fac'
         )
 
-    wandb.agent(sweep_id, function=parser, count=5)
+    wandb.agent(sweep_id, function=parser, count=1)
