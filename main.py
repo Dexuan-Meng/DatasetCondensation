@@ -321,5 +321,3 @@ if __name__ == '__main__':
     parser.add_argument('--tag', type=str, default='DC-ipc1-MNIST', help='Tag for grouping in wandb')
     args = parser.parse_args()
     main(args)
-
-
