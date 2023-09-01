@@ -20,8 +20,8 @@ def main(args):
     args.device = 'cuda' if torch.cuda.is_available() else 'cpu'
     args.dsa_param = ParamDiffAug()
     args.dsa = True if args.method == 'DSA' else False
-    # if args.dataset == 'MNIST':
-    #     args.single_channel = True
+    if args.dataset == 'MNIST':
+        args.single_channel = True
 
     if not os.path.exists(args.data_path):
         os.mkdir(args.data_path)
@@ -157,7 +157,7 @@ def main(args):
                         print('DC augmentation parameters: \n', args.dc_aug_param)
 
                     if args.dsa or args.dc_aug_param['strategy'] != 'none':
-                        args.epoch_eval_train = 1000  # Training with data augmentation needs more epochs.
+                        args.epoch_eval_train = 300  # Training with data augmentation needs more epochs.
                     else:
                         args.epoch_eval_train = 300
 
@@ -341,7 +341,8 @@ def main(args):
                 embed_c_0 = torch.nn.functional.normalize(embed_c[:image_base.shape[0]])
                 embed_c_1 = torch.nn.functional.normalize(embed_c[image_base.shape[0]:])
                 contrast_content_loss = contrast(torch.stack([embed_c_0, embed_c_1], dim=1), label)
-                sim_content_loss = cls_content_loss * args.lambda_cls_content + likeli_content_loss * args.lambda_likeli_content + contrast_content_loss * args.lambda_contrast_content
+                sim_content_loss = cls_content_loss * args.lambda_cls_content + likeli_content_loss * args.lambda_likeli_content \
+                      + contrast_content_loss * args.lambda_contrast_content
                 
                 optimizer_sim_content.zero_grad()
                 # optimizer_style.zero_grad()
@@ -414,7 +415,8 @@ def main(args):
     print('\n==================== Final Results ====================\n')
     for key in model_eval_pool:
         accs = accs_all_exps[key]
-        print('Run %d experiments, train on %s, evaluate %d random %s, mean  = %.2f%%  std = %.2f%%'%(args.num_exp, args.model, len(accs), key, np.mean(accs)*100, np.std(accs)*100))
+        print('Run %d experiments, train on %s, evaluate %d random %s, mean  = %.2f%%  std = %.2f%%' \
+              %(args.num_exp, args.model, len(accs), key, np.mean(accs)*100, np.std(accs)*100))
 
 
 # if __name__ == '__main__':
@@ -424,10 +426,12 @@ if not SWEEP:
 
     parser = argparse.ArgumentParser(description='Parameter Processing')
     parser.add_argument('--method', type=str, default='DC', help='DC/DSA')
-    parser.add_argument('--dataset', type=str, default='CIFAR10', help='dataset')
+    parser.add_argument('--dataset', type=str, default='MNIST', help='dataset')
     parser.add_argument('--model', type=str, default='ConvNet', help='model')
     parser.add_argument('--ipc', type=int, default=1, help='image(s) per class')
-    parser.add_argument('--eval_mode', type=str, default='S', help='eval_mode') # S: the same to training model, M: multi architectures,  W: net width, D: net depth, A: activation function, P: pooling layer, N: normalization layer,
+    parser.add_argument('--eval_mode', type=str, default='S', 
+                        help='eval_mode. S: the same to training model, M: multi architectures,  W: net width, D: net depth, \
+                        A: activation function, P: pooling layer, N: normalization layer,') # 
     parser.add_argument('--num_exp', type=int, default=1, help='the number of experiments')
     parser.add_argument('--num_eval', type=int, default=5, help='the number of evaluating randomly initialized models')
     parser.add_argument('--epoch_eval_train', type=int, default=300, help='epochs to train a model with synthetic data')
@@ -439,19 +443,19 @@ if not SWEEP:
     parser.add_argument('--save_path', type=str, default='result', help='path to save results')
     parser.add_argument('--dis_metric', type=str, default='ours', help='distance metric')
     ####################################################################################
-    parser.add_argument('--n_style', type=int, default=5, help='the number of styles')
-    parser.add_argument('--single_channel', action='store_true', help="using single-channel but more basis")
+    parser.add_argument('--n_style', type=int, default=3, help='the number of styles')
+    parser.add_argument('--single_channel', type=bool, default=False, help="using single-channel but more basis")
 
     parser.add_argument('--lr_img', type=float, default=0.5, help='learning rate for updating synthetic images')
     parser.add_argument('--lr_net', type=float, default=0.05, help='learning rate for updating network parameters')
     parser.add_argument('--lr_style', type=float, default=0.0005, help='learning rate for updating style translator')
-    parser.add_argument('--lr_extractor', type=float, default=0.05, help='learning rate for updating extractor')
-    parser.add_argument('--lambda_club_content', type=float, default=2.82)
-    parser.add_argument('--lambda_likeli_content', type=float, default=0.228)
-    parser.add_argument('--lambda_cls_content', type=float, default=13.)
-    parser.add_argument('--lambda_contrast_content', type=float, default=0.228)
+    parser.add_argument('--lr_extractor', type=float, default=0.005, help='learning rate for updating extractor')
+    parser.add_argument('--lambda_club_content', type=float, default=10)
+    parser.add_argument('--lambda_likeli_content', type=float, default=1)
+    parser.add_argument('--lambda_cls_content', type=float, default=1)
+    parser.add_argument('--lambda_contrast_content', type=float, default=1)
 
-    parser.add_argument('--Iteration', type=int, default=200, help='training iterations')    
+    parser.add_argument('--Iteration', type=int, default=1500, help='training iterations')    
     parser.add_argument('--eval_it', type=int, default=100, help='how often to evaluate')
     ####################################################################################
     args = parser.parse_args()
@@ -465,13 +469,14 @@ else:
 
         parser = argparse.ArgumentParser(description='Parameter Processing')
         parser.add_argument('--method', type=str, default='DC', help='DC/DSA')
-        parser.add_argument('--dataset', type=str, default='CIFAR10', help='dataset')
+        parser.add_argument('--dataset', type=str, default='MNIST', help='dataset')
         parser.add_argument('--model', type=str, default='ConvNet', help='model')
         parser.add_argument('--ipc', type=int, default=1, help='image(s) per class')
-        parser.add_argument('--eval_mode', type=str, default='S', help='eval_mode') # S: the same to training model, M: multi architectures,  W: net width, D: net depth, A: activation function, P: pooling layer, N: normalization layer,
+        parser.add_argument('--eval_mode', type=str, default='S', help='eval_mode. S: the same to training model, M: multi architectures,  W: net width, \
+                            D: net depth, A: activation function, P: pooling layer, N: normalization layer,') 
         parser.add_argument('--num_exp', type=int, default=1, help='the number of experiments')
-        parser.add_argument('--num_eval', type=int, default=3, help='the number of evaluating randomly initialized models')
-        parser.add_argument('--epoch_eval_train', type=int, default=300, help='epochs to train a model with synthetic data')
+        parser.add_argument('--num_eval', type=int, default=5, help='the number of evaluating randomly initialized models')
+        parser.add_argument('--epoch_eval_train', type=int, default=100, help='epochs to train a model with synthetic data')
         parser.add_argument('--batch_real', type=int, default=256, help='batch size for real data')
         parser.add_argument('--batch_train', type=int, default=256, help='batch size for training networks')
         parser.add_argument('--init', type=str, default='noise', help='noise/real: initialize synthetic images from random noise or randomly sampled real images.')
@@ -501,7 +506,7 @@ else:
 
     sweep_configuration = {
         # 'name': 'sweep-HparamsTuning-1',
-        'name': 'sweep-HparamsTest-2(iter=1500)',
+        'name': 'sweep-HparamsTest-4(iter=1500)',
         'method': 'random',
         'metric': 
         {
@@ -512,7 +517,7 @@ else:
         {   
             'Iteration': {'value': 1500},
             'single_channel': {'value': False},
-            'tag': {'value': 'DCF-CIFAR10-ImageLog'},
+            'tag': {'value': 'DCF-CIFAR10'},
             'dataset': {'value': 'CIFAR10'},
 
             'lr_img': {'values': [0.5]},
@@ -541,4 +546,4 @@ else:
         project='DC-Fac'
         )
 
-    wandb.agent(sweep_id, function=parser, count=1)
+    wandb.agent(sweep_id, function=parser, count=3)
